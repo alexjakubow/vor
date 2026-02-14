@@ -1,0 +1,334 @@
+
+---
+title: "OSF Preprints: External Version of Record Analysis"
+author: "Alex Jakubow"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    theme: cosmo
+    fig-width: 8
+    fig-height: 6
+    echo: false
+---
+
+## Introduction
+
+This report analyzes the extent to which preprints hosted on the Open Science Framework (OSF) link to external versions of record (VOR). Understanding these linkages is important for tracking the scholarly publishing pathway and assessing how preprints transition to formal publications.  It will also help identify the proportion of OSF preprints that have a presence outside of the OSF ecosystem, which can inform strategies for improving discoverability, integration with other scholarly platforms, and navigating any potential plans to deprecate preprints on OSF.
+
+### Research Question
+
+**How many preprints on OSF point to an external version of record that lives somewhere other than OSF?**
+
+These external versions could be:
+
+- Carbon copies (or near copies) hosted on other preprint servers
+- Versions of the same preprint eventually published in academic journals
+- Other forms of the work published in different venues
+
+## Methodology
+
+### Data Source
+
+The analysis uses preprint data from the OSF database, specifically focusing on preprints that meet the following criteria:
+
+- **Public**: Preprint is publicly accessible
+- **Not deleted**: Preprint has not been marked as deleted
+- **Accepted**: Machine state is "accepted"
+- **Published**: Preprint is marked as published
+- **No existing article DOI**: The preprint does not already have an `article_doi` field populated
+
+### Sample
+
+A random sample of **10,000 preprints** was selected from the OSF database using a fixed random seed (8675309) for reproducibility.
+
+### DOI Lookup Process
+
+For each preprint DOI, we queried the [OpenAlex API](https://docs.openalex.org/) to retrieve:
+
+- Location information (where the work appears)
+- Open access status
+- Version information (preprint, accepted manuscript, published version)
+
+The lookup process involved:
+
+1. Extracting preprint DOIs from the OSF database
+2. Making parallel API requests to OpenAlex (throttled to respect rate limits)
+3. Saving successful and failed requests to log files
+4. Processing the JSON responses to extract location data
+5. Filtering out locations that point back to OSF itself
+
+
+
+```{r setup, message=FALSE, warning=FALSE}
+### Data Processing
+library(dplyr)
+library(readr)
+library(knitr)
+library(tidyr)
+
+# Load the processed data
+summary_data <- read_csv("data/doi_lookup_summary.csv", show_col_types = FALSE)
+log_data <- read_csv("logs/doi_lookup_status.csv", show_col_types = FALSE)
+detailed_results <- read_csv(
+  "data/doi_lookup_results.csv",
+  show_col_types = FALSE
+)
+```
+
+## Results
+
+### Sample Size and API Success Rate
+
+The first step in our analysis is understanding how many DOI lookups were successful.
+
+```{r sample-stats}
+# Calculate basic statistics
+total_attempted <- nrow(log_data)
+successful_lookups <- sum(log_data$success)
+failed_lookups <- total_attempted - successful_lookups
+success_rate <- successful_lookups / total_attempted * 100
+
+# Create summary table
+sample_table <- tibble(
+  Metric = c(
+    "Total preprint DOIs attempted",
+    "Successful lookups",
+    "Failed lookups",
+    "Success rate"
+  ),
+  Count = c(
+    total_attempted,
+    successful_lookups,
+    failed_lookups,
+    NA
+  ),
+  Percentage = c(
+    NA,
+    success_rate,
+    100 - success_rate,
+    success_rate
+  )
+) |>
+  mutate(
+    Value = case_when(
+      !is.na(Count) & is.na(Percentage) ~ format(Count, big.mark = ","),
+      !is.na(Count) & !is.na(Percentage) ~ paste0(
+        format(Count, big.mark = ","),
+        " (",
+        round(Percentage, 1),
+        "%)"
+      ),
+      is.na(Count) & !is.na(Percentage) ~ paste0(round(Percentage, 1), "%"),
+      TRUE ~ ""
+    )
+  ) |>
+  select(Metric, Value)
+
+kable(sample_table, caption = "Table 1: DOI Lookup Success Rate")
+```
+
+**Key Finding:** The OpenAlex API successfully returned data for **`r round(success_rate, 1)`%** of the queried DOIs, indicating excellent data availability.
+
+### External Location Funnel Analysis
+
+This analysis tracks how many preprints have external locations (non-OSF) at each stage:
+
+```{r funnel-analysis}
+# Calculate funnel statistics
+with_external <- sum(summary_data$n_external_locations > 0, na.rm = TRUE)
+with_external_oa <- sum(summary_data$any_external_oa, na.rm = TRUE)
+
+# Create funnel table
+funnel_table <- tibble(
+  Stage = c(
+    "1. Successful OpenAlex lookups",
+    "2. With at least one external location (non-OSF)",
+    "3. With at least one external open access version"
+  ),
+  Count = c(
+    successful_lookups,
+    with_external,
+    with_external_oa
+  ),
+  `% of Previous Stage` = c(
+    NA,
+    with_external / successful_lookups * 100,
+    with_external_oa / with_external * 100
+  ),
+  `% of Total Sample` = c(
+    successful_lookups / total_attempted * 100,
+    with_external / total_attempted * 100,
+    with_external_oa / total_attempted * 100
+  )
+) |>
+  mutate(
+    across(starts_with("%"), ~ round(.x, 1)),
+    Count = format(Count, big.mark = ",")
+  )
+
+kable(
+  funnel_table,
+  caption = "Table 2: External Location Funnel",
+  align = c("l", "r", "r", "r")
+)
+```
+
+**Key Findings:**
+
+- **`r round(with_external / successful_lookups * 100, 1)`%** of successfully looked-up preprints have at least one external location (non-OSF)
+- Of those with external locations, **`r round(with_external_oa / with_external * 100, 1)`%** have at least one open access version
+- Overall, **`r round(with_external_oa / total_attempted * 100, 1)`%** of the original sample has an external open access version
+
+### Distribution of External Locations
+
+Let's examine how many external locations each preprint has:
+
+```{r location-distribution}
+# Create distribution table
+distribution <- summary_data |>
+  mutate(n_external_locations = replace_na(n_external_locations, 0)) |>
+  count(n_external_locations, name = "n_preprints") |>
+  mutate(
+    percentage = n_preprints / sum(n_preprints) * 100,
+    cumulative_pct = cumsum(percentage)
+  ) |>
+  arrange(n_external_locations)
+
+kable(
+  distribution,
+  col.names = c(
+    "Number of External Locations",
+    "Number of Preprints",
+    "Percentage",
+    "Cumulative %"
+  ),
+  caption = "Table 3: Distribution of External Locations per Preprint",
+  digits = 1,
+  align = c("r", "r", "r", "r")
+)
+```
+
+**Key Finding:** The vast majority of preprints (`r round(distribution$percentage[distribution$n_external_locations == 0], 1)`%) have no external locations, while `r round(sum(distribution$percentage[distribution$n_external_locations > 0]), 1)`% have at least one external location.
+
+### Types of External Locations
+
+Let's examine what types of external locations were found:
+
+```{r location-types}
+# Analyze types of external locations
+location_types <- detailed_results |>
+  count(version, is_oa, sort = TRUE) |>
+  mutate(
+    percentage = n / sum(n) * 100,
+    is_oa = ifelse(is_oa, "Open Access", "Not Open Access")
+  )
+
+kable(
+  location_types,
+  col.names = c("Version Type", "Access Status", "Count", "Percentage"),
+  caption = "Table 4: Types of External Locations Found",
+  digits = 1,
+  align = c("l", "l", "r", "r")
+)
+```
+
+The `Version Type` column indicates whether the external location is a preprint, accepted manuscript, or published version, while the `Access Status` column indicates whether it is open access.  These fields are from the OpenAlex API response and their definitions can be found in the OpenAlex documentation.
+
+## Key Findings Summary
+
+Based on the analysis of `r format(total_attempted, big.mark = ",")` OSF preprint DOIs:
+
+1. **High API Success Rate**: `r round(success_rate, 1)`% of DOIs were successfully looked up in OpenAlex
+
+2. **Limited External Presence**: Only `r round(with_external / successful_lookups * 100, 1)`% of preprints have at least one external location (non-OSF)
+
+3. **Open Access Availability**: Among preprints with external locations, `r round(with_external_oa / with_external * 100, 1)`% have at least one open access version available
+
+4. **Overall External OA Rate**: Just `r round(with_external_oa / total_attempted * 100, 1)`% of the total sample has an external open access version
+
+## Next Steps and Recommendations
+
+### Further Analyses
+
+1. **Temporal Analysis**
+   - Examine whether the rate of external VOR linkages has changed over time
+   - Analyze the time lag between preprint posting and external publication
+   - Use the `created` date field from the preprint metadata
+
+2. **Domain-Specific Analysis**
+   - Investigate whether certain research fields have higher rates of external VOR
+   - Consider adding discipline/subject classifications from OpenAlex
+   - Compare patterns across different OSF preprint servers
+
+3. **Publisher and Venue Analysis**
+   - Identify which journals/publishers most commonly publish OSF preprints
+   - Analyze patterns by venue type (journal vs. preprint server)
+   - Examine the `raw_type` field in the detailed results
+
+4. **Version Progression Analysis**
+   - Track the progression from preprint to accepted manuscript to published version
+   - Analyze what percentage reach each stage of the publishing process
+   - Use the `version`, `is_accepted`, and `is_published` fields
+
+5. **Failed Lookup Investigation**
+   - Examine the `r failed_lookups` failed lookups to understand why they failed
+   - Determine if failed lookups represent a biased sample
+   - Consider alternative methods for these cases
+
+### Data Quality Considerations
+
+1. **DOI Coverage**: Investigate whether the preprints without external locations truly have no external versions, or if they're simply not indexed in OpenAlex
+
+2. **Manual Validation**: Consider manually reviewing a random sample of cases to validate the automated findings
+
+3. **Missing Data**: Explore patterns in the `r failed_lookups` failed lookups to ensure they don't represent a systematic bias
+
+4. **OSF Filtering**: Verify that the filtering logic correctly excludes only OSF locations and doesn't inadvertently remove legitimate external locations
+
+### Potential Research Questions
+
+1. **What factors predict whether an OSF preprint will have an external VOR?**
+   - Preprint quality indicators (downloads, citations)
+   - Author characteristics (reputation, institution)
+   - Field of study
+   - Preprint server
+
+2. **How does OSF compare to other preprint servers in terms of VOR linkages?**
+   - Compare OSF rates to arXiv, bioRxiv, medRxiv, etc.
+   - Analyze whether OSF's multidisciplinary nature affects VOR rates
+
+3. **What is the relationship between preprint visibility and eventual publication?**
+   - Do preprints with more downloads/views have higher publication rates?
+   - Does open access status of the preprint affect subsequent publication?
+
+### Implementation Recommendations
+
+1. **Expand Sample Size**: Consider running the analysis on the full dataset rather than just 10,000 preprints to get more robust estimates
+
+2. **Longitudinal Tracking**: Set up periodic re-runs of this analysis to track how VOR linkages evolve over time
+
+3. **Integration with OSF**: Consider ways to surface these external VOR linkages in the OSF interface to help users discover related versions
+
+## Technical Notes
+
+The analysis pipeline consists of:
+
+- **Data extraction**: SQL queries against OSF database tables
+- **API queries**: Parallel requests to OpenAlex API with throttling
+- **Data processing**: JSON parsing and filtering of location data
+- **Output**: Summary CSV files for further analysis
+
+All code is available in `openalex.r` and can be reproduced using the same random seed (8675309).
+
+## Appendix: Data Files
+
+The analysis generates the following output files:
+
+- `data/doi_lookup_summary.csv`: Summary statistics for each preprint
+- `data/doi_lookup_results.csv`: Detailed location data for external VORs
+- `logs/doi_lookup_status.csv`: API request success/failure log
+
+The data files are not included in this report (or the codebase) but can be referenced on Google Drive for further exploration.
