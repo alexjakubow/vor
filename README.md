@@ -2,10 +2,15 @@
 
 This repository analyzes the extent to which preprints hosted on the Open Science Framework (OSF) link to external versions of record (VOR). The goal is to understand how many OSF preprints point to external versions that live somewhere other than OSF, including copies on other preprint servers or versions eventually published in academic journals.
 
+## 📊 View the Report
+
+**[View the full analysis report here](https://alexjakubow.github.io/vor/osf_preprint_vor_analysis.html)**
+
+The report is automatically rendered and published via GitHub Actions whenever changes are pushed to the main branch.
+
 ## Overview
 
 Using the OpenAlex API, this project:
-
 - Extracts preprint DOIs from the OSF database
 - Queries OpenAlex for location and version information
 - Identifies external versions of record (non-OSF locations)
@@ -14,7 +19,6 @@ Using the OpenAlex API, this project:
 ## Key Findings
 
 From a sample of 10,000 OSF preprints:
-
 - **99.4%** successfully looked up in OpenAlex
 - **3.7%** have at least one external location (non-OSF)
 - **47.5%** of those with external locations have open access versions
@@ -29,8 +33,11 @@ From a sample of 10,000 OSF preprints:
 ├── data/
 │   ├── doi_lookup_summary.csv      # Summary statistics per preprint
 │   └── doi_lookup_results.csv      # Detailed external location data
-└── logs/
-    └── doi_lookup_status.csv       # API request success/failure log
+├── logs/
+│   └── doi_lookup_status.csv       # API request success/failure log
+└── .github/
+    └── workflows/
+        └── render-quarto.yml       # GitHub Actions workflow for automatic rendering
 ```
 
 ## Requirements
@@ -63,7 +70,7 @@ openalex_doi_search(sample_size = 10000)
 openalex_doi_search(sample_size = NULL)
 ```
 
-### Generating the Report
+### Generating the Report Locally
 
 ```r
 # In R
@@ -74,6 +81,17 @@ Or from the command line:
 ```bash
 quarto render osf_preprint_vor_analysis.qmd
 ```
+
+### Automated Report Publishing
+
+The repository is configured with GitHub Actions to automatically:
+1. Render the Quarto document whenever changes are pushed to `main`
+2. Publish the HTML output to GitHub Pages
+
+To enable this for your fork:
+1. Go to your repository's **Settings** → **Pages**
+2. Under "Source", select **GitHub Actions**
+3. Push changes to the `main` branch to trigger the workflow
 
 ## Methodology
 
