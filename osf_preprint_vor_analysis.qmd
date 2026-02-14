@@ -12,6 +12,7 @@ format:
     fig-width: 8
     fig-height: 6
     echo: false
+    embed-resources: true
 ---
 
 ## Introduction
